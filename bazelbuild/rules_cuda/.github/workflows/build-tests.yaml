@@ -1,0 +1,113 @@
+name: Test Example Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    name: "Test Examples Build (CUDA ${{ matrix.cases.cuda-version }} on ${{ matrix.cases.os }})"
+    runs-on: ${{ matrix.cases.os }}
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        cases:
+          - { os: "ubuntu-20.04", cuda-version: "11.2.2", source: "nvidia" }
+          - { os: "ubuntu-22.04", cuda-version: "11.8.0", source: "nvidia" }
+          - {
+              os: "ubuntu-20.04",
+              cuda-version: "11.6.2",
+              source: "nvidia",
+              toolchain: "llvm",
+              toolchain-version: "16",
+            }
+          - {
+              os: "ubuntu-22.04",
+              cuda-version: "11.5.1-1ubuntu1",
+              source: "ubuntu",
+            }
+          - { os: "windows-2019", cuda-version: "10.1.243", source: "nvidia" }
+          - { os: "windows-2019", cuda-version: "11.6.2", source: "nvidia" }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bazelbuild/setup-bazelisk@v3
+      - name: Mount bazel cache
+        if: ${{ !startsWith(matrix.cases.os, 'windows') }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bazel
+          key: bazel-${{ matrix.cases.os }}-cuda-${{ matrix.cases.cuda-version }}-${{ hashFiles('.bazelversion') }}
+
+      - name: Setup build environment
+        uses: ./.github/actions/set-build-env
+        with:
+          os: ${{ matrix.cases.os }}
+          cuda-version: ${{ matrix.cases.cuda-version }}
+          source: ${{ matrix.cases.source }}
+          toolchain: ${{ matrix.cases.toolchain }}
+          toolchain-version: ${{ matrix.cases.toolchain-version }}
+
+      - name: Bazel build config for LLVM
+        if: ${{ !startsWith(matrix.cases.os, 'windows') && matrix.cases.toolchain == 'llvm' }}
+        run: |
+          echo "build --config=clang" > $HOME/.bazelrc
+          echo "build:clang --@rules_cuda//cuda:archs=sm_80" >> $HOME/.bazelrc
+
+      # Check https://bazel.build/release#support-matrix, manually unroll the the strategy matrix to avoid exploding
+      # the combinations.
+
+      # Use Bazel with version specified in .bazelversion
+      - run: echo "USE_BAZEL_VERSION=$(cat .bazelversion)" >> $GITHUB_ENV
+        if: ${{ !startsWith(matrix.cases.os, 'windows') }}
+      - run: echo "USE_BAZEL_VERSION=$(cat .bazelversion)" >> $env:GITHUB_ENV
+        if: ${{ startsWith(matrix.cases.os, 'windows') }}
+
+      # out of @examples repo build requires WORKSPACE-based external dependency system
+      - run: bazelisk build --jobs=1 --noenable_bzlmod @rules_cuda_examples//basic:all
+      - run: bazelisk build --jobs=1 --noenable_bzlmod @rules_cuda_examples//rdc:all
+      - run: bazelisk build --jobs=1 --noenable_bzlmod @rules_cuda_examples//if_cuda:main
+      - run: bazelisk build --jobs=1 --noenable_bzlmod @rules_cuda_examples//if_cuda:main --enable_cuda=False
+      # in @examples repo build, bzlmod is enabled by default since Bazel 7
+      - run: cd examples && bazelisk build --jobs=1 //basic:all
+      - run: cd examples && bazelisk build --jobs=1 //rdc:all
+      - run: cd examples && bazelisk build --jobs=1 //if_cuda:main
+      - run: cd examples && bazelisk build --jobs=1 //if_cuda:main --enable_cuda=False
+      - run: bazelisk shutdown
+      # run some repo integration tests
+      - run: cd tests/integration && ./test_all.sh
+
+      # Use Bazel 6
+      - run: echo "USE_BAZEL_VERSION=6.4.0" >> $GITHUB_ENV
+        if: ${{ !startsWith(matrix.cases.os, 'windows') }}
+      - run: echo "USE_BAZEL_VERSION=6.4.0" >> $env:GITHUB_ENV
+        if: ${{ startsWith(matrix.cases.os, 'windows') }}
+
+      - run: bazelisk build --jobs=1 @rules_cuda_examples//basic:all
+      - run: bazelisk build --jobs=1 @rules_cuda_examples//rdc:all
+      - run: bazelisk build --jobs=1 @rules_cuda_examples//if_cuda:main
+      - run: bazelisk build --jobs=1 @rules_cuda_examples//if_cuda:main --enable_cuda=False
+      - run: cd examples && bazelisk build --jobs=1 --enable_bzlmod //basic:all
+      - run: cd examples && bazelisk build --jobs=1 --enable_bzlmod //rdc:all
+      - run: cd examples && bazelisk build --jobs=1 --enable_bzlmod //if_cuda:main
+      - run: cd examples && bazelisk build --jobs=1 --enable_bzlmod //if_cuda:main --enable_cuda=False
+      - run: bazelisk shutdown
+
+      # Use Bazel 5
+      - run: echo "USE_BAZEL_VERSION=5.4.1" >> $GITHUB_ENV
+        if: ${{ !startsWith(matrix.cases.os, 'windows') }}
+      - run: echo "USE_BAZEL_VERSION=5.4.1" >> $env:GITHUB_ENV
+        if: ${{ startsWith(matrix.cases.os, 'windows') }}
+
+      - run: bazelisk build --jobs=1 @rules_cuda_examples//basic:all
+      - run: bazelisk build --jobs=1 @rules_cuda_examples//rdc:all
+      - run: bazelisk build --jobs=1 @rules_cuda_examples//if_cuda:main
+      - run: bazelisk build --jobs=1 @rules_cuda_examples//if_cuda:main --enable_cuda=False
+      # bzlmod is not covered, our separate @rules_cuda_examples repo setup doesn't play well with it
+      # - run: cd examples && bazelisk build --jobs=1 --experimental_enable_bzlmod //basic:all
+      # - run: cd examples && bazelisk build --jobs=1 --experimental_enable_bzlmod //rdc:all
+      # - run: cd examples && bazelisk build --jobs=1 --experimental_enable_bzlmod //if_cuda:main
+      # - run: cd examples && bazelisk build --jobs=1 --experimental_enable_bzlmod //if_cuda:main --enable_cuda=False
+      - run: bazelisk shutdown

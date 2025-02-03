@@ -1,0 +1,83 @@
+cc_import_versioned_sos(
+    name = "cufft_so",
+    shared_library = "%{component_name}/%{libpath}/libcufft.so",
+)
+
+cc_import(
+    name = "cufft_lib",
+    interface_library = "%{component_name}/%{libpath}/x64/cufft.lib",
+    system_provided = 1,
+    target_compatible_with = ["@platforms//os:windows"],
+)
+
+cc_import_versioned_sos(
+    name = "cufftw_so",
+    shared_library = "%{component_name}/%{libpath}/libcufftw.so",
+)
+
+cc_import(
+    name = "cufftw_lib",
+    interface_library = "%{component_name}/%{libpath}/x64/cufftw.lib",
+    system_provided = 1,
+    target_compatible_with = ["@platforms//os:windows"],
+)
+
+cc_library(
+    name = "cufft",
+    deps = [
+        ":%{component_name}_headers",
+    ] + if_linux([
+        ":cufft_so",
+        ":cufftw_so",
+    ]) + if_windows([
+        ":cufft_lib",
+        ":cufftw_lib",
+    ]),
+)
+
+cc_import(
+    name = "cufftw_static_a",
+    static_library = "%{component_name}/%{libpath}/libcufftw_static.a",
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+cc_import(
+    name = "cufft_static_a",
+    static_library = "%{component_name}/%{libpath}/libcufft_static.a",
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+cc_import(
+    name = "cufft_static_nocallback_a",
+    static_library = "%{component_name}/%{libpath}/libcufft_static_nocallback.a",
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+cc_library(
+    name = "cufftw_static",
+    deps = [
+        ":%{component_name}_headers",
+    ] + if_linux([
+        ":cufftw_static_a",
+    ]),
+)
+
+cc_library(
+    name = "cufft_static",
+    deps = [
+        ":%{component_name}_headers",
+    ] + if_linux([
+        ":cufftw_static_a",
+        ":cufft_static_a",
+    ]),
+)
+
+cc_library(
+    name = "cufft_static_nocallback",
+    deps = [
+        ":%{component_name}_headers",
+    ] + if_linux([
+        ":cufftw_static_a",
+        ":cufft_static_nocallback_a",
+    ]),
+)
