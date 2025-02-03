@@ -1,0 +1,161 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 359aede..7816846 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -77,9 +77,6 @@ if(MSVC)
+     #enabling Control Flow Guard
+     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /guard:cf")
+     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /guard:cf")
+-    # enable Spectre Mitigation
+-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Qspectre")
+-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /Qspectre")
+ endif()
+ 
+ #CXX compiler support
+@@ -104,24 +101,24 @@ if(MSVC)
+     string(REPLACE "/MD" "/MT" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+ 
+     # treat warnings as errors
+-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX /W3")
++    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3")
+ 
+     # enable multi-process compilation
+     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
+ 
+     # enable exceptions handling
+     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc")
+-    
++
+     # enable creation of PDB files for Release Builds
+     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Zi")
+     set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
+-		
++
+     # enable CET shadow stack
+     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /CETCOMPAT")
+ 
+     #Use of sccache with MSVC requires workaround of replacing /Zi with /Z7
+     #https://github.com/mozilla/sccache
+-    if(USE_Z7) #sccache 
++    if(USE_Z7) #sccache
+       string(REPLACE "/Zi" "/Z7" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+       string(REPLACE "/Zi" "/Z7" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+       string(REPLACE "/Zi" "/Z7" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+@@ -138,10 +135,16 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/source/wrapper/include)
+ include_directories("${CMAKE_CURRENT_SOURCE_DIR}")
+ 
+ set(TARGET_LOADER_NAME ze_loader)
++set(TARGET_LIB_TYPE SHARED)
+ 
+-
++if(NOT BUILD_SHARED)
++    # build static library instead of shared library
++    # hence don't need to and won't export functions
++    add_definitions(-DZE_APIEXPORT= -DZE_DLLEXPORT=)
++    set(TARGET_LIB_TYPE STATIC)
++endif()
+ add_subdirectory(source)
+-add_subdirectory(samples)
++# add_subdirectory(samples)
+ 
+ include("os_release_info.cmake")
+ get_os_release_info(os_name os_version os_codename)
+diff --git a/source/CMakeLists.txt b/source/CMakeLists.txt
+index a3d9bb8..703ec32 100644
+--- a/source/CMakeLists.txt
++++ b/source/CMakeLists.txt
+@@ -13,15 +13,19 @@ configure_file(
+ 
+ include(GNUInstallDirs)
+ add_library(${TARGET_LOADER_NAME}
+-    SHARED
++    ${TARGET_LIB_TYPE}
+     ""
+     ${CMAKE_CURRENT_BINARY_DIR}/ZeLoaderVersion.rc
+ )
+ 
++if(NOT BUILD_SHARED)
++    target_compile_definitions(${TARGET_LOADER_NAME} PRIVATE -DZE_STATIC_INIT)
++endif()
++
+ add_subdirectory(lib)
+ add_subdirectory(loader)
+ add_subdirectory(layers)
+-add_subdirectory(drivers)
++# add_subdirectory(drivers)
+ 
+ set_target_properties(${TARGET_LOADER_NAME} PROPERTIES
+     VERSION "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}"
+diff --git a/source/layers/tracing/CMakeLists.txt b/source/layers/tracing/CMakeLists.txt
+index f3ee3dd..0017ab6 100644
+--- a/source/layers/tracing/CMakeLists.txt
++++ b/source/layers/tracing/CMakeLists.txt
+@@ -8,7 +8,7 @@ configure_file(
+     @ONLY)
+ 
+ add_library(${TARGET_NAME}
+-    SHARED
++    ${TARGET_LIB_TYPE}
+         ${CMAKE_CURRENT_SOURCE_DIR}/ze_tracing_layer.h
+         ${CMAKE_CURRENT_SOURCE_DIR}/tracing.h
+         ${CMAKE_CURRENT_SOURCE_DIR}/tracing_imp.h
+diff --git a/source/layers/validation/CMakeLists.txt b/source/layers/validation/CMakeLists.txt
+index 68b99e6..d1dd830 100644
+--- a/source/layers/validation/CMakeLists.txt
++++ b/source/layers/validation/CMakeLists.txt
+@@ -8,7 +8,7 @@ configure_file(
+     @ONLY)
+ 
+ add_library(${TARGET_NAME}
+-    SHARED
++    ${TARGET_LIB_TYPE}
+         ${CMAKE_CURRENT_SOURCE_DIR}/ze_validation_layer.h
+         ${CMAKE_CURRENT_SOURCE_DIR}/ze_validation_layer.cpp
+         ${CMAKE_CURRENT_SOURCE_DIR}/ze_valddi.cpp
+diff --git a/source/lib/ze_lib.cpp b/source/lib/ze_lib.cpp
+index b08da98..43e26e0 100644
+--- a/source/lib/ze_lib.cpp
++++ b/source/lib/ze_lib.cpp
+@@ -20,6 +20,9 @@ namespace ze_lib
+     ///////////////////////////////////////////////////////////////////////////////
+     context_t::context_t()
+     {
++#ifndef DYNAMIC_LOAD_LOADER
++        loader::context = new loader::context_t;
++#endif
+     };
+ 
+     ///////////////////////////////////////////////////////////////////////////////
+@@ -27,6 +30,8 @@ namespace ze_lib
+     {
+ #ifdef DYNAMIC_LOAD_LOADER
+         FREE_DRIVER_LIBRARY( loader );
++#else
++        delete loader::context;
+ #endif
+     };
+ 
+@@ -98,6 +103,23 @@ namespace ze_lib
+ 
+ } // namespace ze_lib
+ 
++#ifdef ZE_STATIC_INIT
++struct context_init_helper
++{
++    context_init_helper()
++    {
++        ze_lib::context = new ze_lib::context_t;
++    }
++
++    ~context_init_helper()
++    {
++        delete ze_lib::context;
++    }
++};
++
++context_init_helper context_init_helper_instance;
++#endif
++
+ extern "C" {
+ 
+ 
